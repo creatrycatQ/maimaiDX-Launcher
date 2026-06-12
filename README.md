@@ -1,6 +1,6 @@
 # maimaiDX Launcher
 
-一个 maimai DX 游戏启动器，带配置 GUI 编辑器。
+一个自制的 maimai DX 游戏启动器，带配置 GUI 编辑器。
 
 ## 项目结构
 
