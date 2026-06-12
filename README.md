@@ -1,22 +1,20 @@
 # maimaiDX Launcher
 
-一个 maimai DX 游戏启动器，集成 Sinmai-Assist 模组，提供更好的游戏体验。
+一个 maimai DX 游戏启动器，带配置 GUI 编辑器。
 
 ## 项目结构
 
 ```
 maimaiDX-Launcher/
-├── GameLauncher/          # 游戏启动器（C# WinForms + WebView2）
-│   ├── Form1.cs           # 主窗口逻辑
-│   ├── Program.cs         # 入口点
-│   ├── ProgressOverlay.cs # 进度覆盖层
+├── GameLauncher/               # 游戏启动器（C# WinForms + WebView2）
+│   ├── Form1.cs                # 主窗口逻辑
+│   ├── Program.cs              # 入口点
+│   ├── ProgressOverlay.cs      # 进度覆盖层
 │   └── GameLauncher.csproj
-└── Sinmai-Assist/         # 游戏模组（C# MelonLoader Mod）
-    ├── Cheat/             # 作弊功能
-    ├── Common/            # 通用功能
-    ├── Fix/               # 修复功能
-    ├── GUI/               # 图形界面
-    └── Sinmai-Assist.sln  # 解决方案文件
+└── Sinmai-Assist/              # 配置编辑器（Python GUI）
+    ├── 启动配置编辑器.bat        # 启动脚本
+    ├── config_editor_gui.py    # Tkinter GUI 编辑器
+    └── Config - zh_CN.yml      # 配置文件
 ```
 
 ## 功能概述
@@ -27,12 +25,10 @@ maimaiDX-Launcher/
 - 游戏路径管理
 - 英文字幕切换
 
-### Sinmai-Assist（模组）
-- **Cheat**: Auto Play, Fast Skip, Unlock Music/Master/Event 等
-- **Common**: Dummy Login, Quick Boot, Show FPS, Single Player Mode 等
-- **Fix**: Disable Encryption, Skip Version Check, Fix Check Auth 等
-
-更多模组详情见 [Sinmai-Assist/README.md](Sinmai-Assist/README.md)
+### Sinmai-Assist（配置编辑器）
+- 基于 Python + Tkinter 的配置文件 GUI 编辑器
+- 编辑 `Config - zh_CN.yml` 配置
+- 自动备份与校验
 
 ## 开发环境
 
@@ -40,10 +36,8 @@ maimaiDX-Launcher/
 - [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
 - Visual Studio 2022 或 VS Code
 
-### Sinmai-Assist
-- [.NET Framework 4.7.2 Developer Pack](https://dotnet.microsoft.com/download/dotnet-framework/net472)
-- [MelonLoader](https://melonwiki.xyz/) v0.6.4 或更低版本
-- SDGB 版本游戏库
+### 配置编辑器
+- Python 3.x + `pyyaml`、`tkinter`
 
 ## 构建
 
@@ -53,11 +47,8 @@ cd GameLauncher/GameLauncher
 dotnet build
 ```
 
-### Sinmai-Assist
-1. 在 Visual Studio 中打开 `Sinmai-Assist/Sinmai-Assist.sln`
-2. 配置库引用（需使用 SDGB 版本库）
-3. 生成解决方案
-4. 将 `Sinmai-Assist.dll` 复制到游戏 `Mods` 文件夹
+### 配置编辑器
+双击 `Sinmai-Assist/启动配置编辑器.bat` 即可运行。
 
 ## 免责声明
 
