@@ -23,32 +23,11 @@ maimaiDX-Launcher/
 - 基于 .NET 8 + WinForms + WebView2 的游戏启动器
 - 支持自定义背景视频
 - 游戏路径管理
-- 英文字幕切换
 
 ### Sinmai-Assist（配置编辑器）
 - 基于 Python + Tkinter 的配置文件 GUI 编辑器
-- 编辑 `Config - zh_CN.yml` 配置
+- 编辑 `Config` 配置
 - 自动备份与校验
-
-## 开发环境
-
-### GameLauncher
-- [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
-- Visual Studio 2022 或 VS Code
-
-### 配置编辑器
-- Python 3.x + `pyyaml`、`tkinter`
-
-## 构建
-
-### GameLauncher
-```bash
-cd GameLauncher/GameLauncher
-dotnet build
-```
-
-### 配置编辑器
-双击 `Sinmai-Assist/启动配置编辑器.bat` 即可运行。
 
 ## 免责声明
 
