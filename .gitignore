@@ -1,0 +1,121 @@
+# ===== Build outputs =====
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+[Oo]utput/
+publish/
+
+# ===== Visual Studio =====
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+*.rsuser
+*.nvuser
+
+# ===== Build results =====
+*.dll
+*.exe
+*.pdb
+*.deps.json
+*.runtimeconfig.json
+*.binlog
+*.plg
+*.opt
+*.vbw
+*.tss
+*.jmconfig
+*.btp.cs
+*.btm.cs
+*.odx.cs
+*.xsd.cs
+*.VisualState.xml
+TestResult.xml
+nunit-*.xml
+
+# ===== NuGet / packages =====
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nupkg
+**/[Pp]ackages/repositories.config
+
+# ===== WebView2 runtime (redistributed) =====
+*WebView2/
+Microsoft.Web.WebView2.*.dll
+Microsoft.Web.WebView2.*.xml
+WebView2Loader.dll
+
+# ===== Runtimes (redistributed) =====
+runtimes/
+
+# ===== Resource files (large binaries) =====
+backgrounds/
+data/backgrounds/
+*.mp4
+*.avi
+*.mkv
+
+# ===== IDE / Editor =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.ionide/
+.localhistory/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# ===== OS files =====
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# ===== Other =====
+.agents/
+.kunsdd/
+*.orig
+*.BACKUP.*
+*.BASE.*
+*.LOCAL.*
+*.REMOTE.*
+*_BACKUP_*.txt
+*_BASE_*.txt
+*_LOCAL_*.txt
+*_REMOTE_*.txt
+*.GhostDoc.xml
+*.mdf
+*.ldf
+*.ndf
+Backup*/
+UpgradeLog*.XML
+UpgradeLog*.htm
+MigrationBackup/
+healthchecksdb
+OpenCover/
+FakesAssemblies/
+BenchmarkDotNet.Artifacts/
+.paket/
+.fake/
+.mfractor/
