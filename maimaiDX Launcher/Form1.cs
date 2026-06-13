@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.IO.Compression;
+using System.Net.Http;
 using System.Runtime.InteropServices;
-using Microsoft.Win32;
+using System.Text.Json;
 using Microsoft.Web.WebView2.WinForms;
 using Microsoft.Web.WebView2.Core;
 
@@ -8,9 +10,10 @@ namespace GameLauncher;
 
 public partial class Form1 : Form
 {
-    // ---- 注册表 ----
-    const string RK = @"SOFTWARE\GameLauncher";
+    // ---- 配置文件 ----
     const string RGP = "GamePath", RES = "EnglishSubtitle", RLB = "LargeBgPath";
+    static string ConfigPath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
+    Dictionary<string, string> _config = new();
 
     WebView2 _webView = null!;
     string _bgFolder = null!;
@@ -23,9 +26,24 @@ public partial class Form1 : Form
     public Form1()
     {
         InitializeComponent();
+        LoadConfig();
         _bgFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data", "backgrounds");
         Directory.CreateDirectory(_bgFolder);
         BuildUI();
+    }
+
+    // ---- 任务栏最小化修复：补齐 WS_SYSMENU | WS_MINIMIZEBOX ----
+    const int WS_SYSMENU = 0x00080000;
+    const int WS_MINIMIZEBOX = 0x00020000;
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            var cp = base.CreateParams;
+            cp.Style |= WS_SYSMENU | WS_MINIMIZEBOX;
+            return cp;
+        }
     }
 
     async void BuildUI()
@@ -82,7 +100,10 @@ public partial class Form1 : Form
                 Text = string.IsNullOrWhiteSpace(payload) ? "MaimaiDX Launcher" : "MaimaiDX - " + payload;
                 break;
             case "openSinmaiEditor":
-                OpenSinmaiEditor();
+                _ = OpenSinmaiEditorAsync();
+                break;
+            case "openOptFolder":
+                OpenOptFolder();
                 break;
             case "resetGamePath":
                 ResetGamePath();
@@ -101,17 +122,24 @@ public partial class Form1 : Form
 
     async Task SendState()
     {
-        var gp = GetReg(RGP) ?? "";
-        var es = GetReg(RES) ?? "MaimaiDX Launcher";
-        var lbg = GetReg(RLB) ?? "";
+        var gp = GetConfig(RGP) ?? "";
+        var es = GetConfig(RES) ?? "MaimaiDX Launcher";
+        var lbg = GetConfig(RLB) ?? "";
         var hasPath = !string.IsNullOrWhiteSpace(gp) && File.Exists(gp);
-        var js = $"setState('{EscapeJs(gp)}','{EscapeJs(es)}','{EscapeJs(lbg)}',{hasPath.ToString().ToLower()})";
+        var optFolderExists = false;
+        if (hasPath)
+        {
+            var dir = Path.GetDirectoryName(gp);
+            if (!string.IsNullOrWhiteSpace(dir))
+                optFolderExists = Directory.Exists(Path.Combine(dir, "Sinmai_Data", "StreamingAssets"));
+        }
+        var js = $"setState('{EscapeJs(gp)}','{EscapeJs(es)}','{EscapeJs(lbg)}',{hasPath.ToString().ToLower()},{optFolderExists.ToString().ToLower()})";
         await _webView.CoreWebView2.ExecuteScriptAsync(js);
     }
 
     async void DoLaunch()
     {
-        var p = GetReg(RGP);
+        var p = GetConfig(RGP);
         if (string.IsNullOrWhiteSpace(p) || !File.Exists(p))
         {
             _ = _webView.CoreWebView2.ExecuteScriptAsync("showStatus('请先设置游戏路径','error')");
@@ -130,7 +158,7 @@ public partial class Form1 : Form
             if (IsDisposed || Disposing) return;
 
             // 2. 桌面右下角显示进度条，跑 3 秒
-            var es = GetReg(RES) ?? "";
+            var es = GetConfig(RES) ?? "";
             overlay = new ProgressOverlay(es);
             await overlay.RunProgressAsync(3000);
             if (IsDisposed || Disposing) { overlay.Close(); return; }
@@ -160,7 +188,7 @@ public partial class Form1 : Form
         }
     }
 
-    void OpenSinmaiEditor()
+    async Task OpenSinmaiEditorAsync()
     {
         // 已有实例在运行则不再启动
         if (_sinmaiProcess != null && !_sinmaiProcess.HasExited)
@@ -171,8 +199,22 @@ public partial class Form1 : Form
 
         var editorDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data", "Sinmai-Assist");
         var scriptPath = Path.Combine(editorDir, "config_editor_gui.py");
+
         try
         {
+            // 如果编辑器文件不存在，自动从 GitHub 下载
+            if (!File.Exists(scriptPath))
+            {
+                _ = _webView.CoreWebView2.ExecuteScriptAsync("showStatus('未找到编辑器文件，正在从GitHub下载...','success')");
+                var downloaded = await DownloadSinmaiAssistAsync(editorDir);
+                if (!downloaded)
+                {
+                    _ = _webView.CoreWebView2.ExecuteScriptAsync("showStatus('下载失败，请检查网络连接后重试','error')");
+                    return;
+                }
+                _ = _webView.CoreWebView2.ExecuteScriptAsync("showStatus('下载完成，正在启动编辑器...','success')");
+            }
+
             if (File.Exists(scriptPath))
             {
                 var psi = new ProcessStartInfo
@@ -197,20 +239,131 @@ public partial class Form1 : Form
         }
     }
 
+    /// <summary>使用 GitHub 加速从仓库下载 Sinmai-Assist 工具文件夹。</summary>
+    async Task<bool> DownloadSinmaiAssistAsync(string targetDir)
+    {
+        try
+        {
+            var repoOwner = "creatrycatQ";
+            var repoName = "maimaiDX-Launcher";
+            var branch = "master";
+
+            // GitHub 下载加速代理（ghproxy.com）
+            var zipUrl = $"https://ghproxy.com/https://github.com/{repoOwner}/{repoName}/archive/refs/heads/{branch}.zip";
+
+            using var http = new HttpClient();
+            http.Timeout = TimeSpan.FromMinutes(2);
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("MaimaiDX-Launcher/1.0");
+
+            var zipPath = Path.Combine(Path.GetTempPath(), $"sinmai_assist_{Guid.NewGuid():N}.zip");
+            var extractRoot = Path.Combine(Path.GetTempPath(), $"sinmai_assist_extract_{Guid.NewGuid():N}");
+
+            try
+            {
+                // 下载 zip
+                var response = await http.GetAsync(zipUrl);
+                response.EnsureSuccessStatusCode();
+                using var fs = File.Create(zipPath);
+                await response.Content.CopyToAsync(fs);
+                fs.Close();
+
+                // 解压
+                ZipFile.ExtractToDirectory(zipPath, extractRoot);
+
+                // 找到解压后的根目录（maimaiDX-Launcher-master）
+                var srcDir = Directory.GetDirectories(extractRoot).FirstOrDefault()
+                    ?? extractRoot;
+
+                // 查找 Sinmai-Assist 子目录
+                var sinmaiAssistSrc = Path.Combine(srcDir, "Sinmai-Assist");
+                if (!Directory.Exists(sinmaiAssistSrc))
+                    sinmaiAssistSrc = Directory.GetDirectories(srcDir, "Sinmai-Assist", SearchOption.AllDirectories).FirstOrDefault()
+                        ?? srcDir;
+
+                // 复制文件到目标目录
+                Directory.CreateDirectory(targetDir);
+                foreach (var file in Directory.GetFiles(sinmaiAssistSrc))
+                {
+                    var dest = Path.Combine(targetDir, Path.GetFileName(file));
+                    File.Copy(file, dest, true);
+                }
+                // 递归复制子目录
+                foreach (var subDir in Directory.GetDirectories(sinmaiAssistSrc))
+                {
+                    var destSubDir = Path.Combine(targetDir, Path.GetFileName(subDir));
+                    CopyDirectoryRecursive(subDir, destSubDir);
+                }
+
+                return true;
+            }
+            finally
+            {
+                // 清理临时文件
+                try { if (File.Exists(zipPath)) File.Delete(zipPath); } catch { }
+                try { if (Directory.Exists(extractRoot)) Directory.Delete(extractRoot, true); } catch { }
+            }
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    static void CopyDirectoryRecursive(string sourceDir, string destDir)
+    {
+        Directory.CreateDirectory(destDir);
+        foreach (var file in Directory.GetFiles(sourceDir))
+            File.Copy(file, Path.Combine(destDir, Path.GetFileName(file)), true);
+        foreach (var subDir in Directory.GetDirectories(sourceDir))
+            CopyDirectoryRecursive(subDir, Path.Combine(destDir, Path.GetFileName(subDir)));
+    }
+
+    /// <summary>打开 opt 文件夹：游戏路径目录下的 Sinmai_Data\StreamingAssets。</summary>
+    void OpenOptFolder()
+    {
+        var gp = GetConfig(RGP);
+        if (string.IsNullOrWhiteSpace(gp) || !File.Exists(gp))
+        {
+            _ = _webView.CoreWebView2.ExecuteScriptAsync("showStatus('请先设置游戏启动路径','error')");
+            return;
+        }
+
+        var dir = Path.GetDirectoryName(gp);
+        if (string.IsNullOrWhiteSpace(dir))
+        {
+            _ = _webView.CoreWebView2.ExecuteScriptAsync("showStatus('无法获取游戏目录','error')");
+            return;
+        }
+
+        var optDir = Path.Combine(dir, "Sinmai_Data", "StreamingAssets");
+        if (!Directory.Exists(optDir))
+        {
+            // 创建目录
+            Directory.CreateDirectory(optDir);
+        }
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "explorer.exe",
+            Arguments = $"\"{optDir}\"",
+            UseShellExecute = false
+        });
+    }
+
     async void ResetGamePath()
     {
-        SaveReg(RGP, "");
+        SaveConfig(RGP, "");
         await SendState();
     }
 
     void BrowseGamePath()
     {
         var d = new OpenFileDialog { Title = "选择启动程序", Filter = "可执行文件|*.exe;*.bat|所有文件|*.*", RestoreDirectory = true };
-        var cur = GetReg(RGP);
+        var cur = GetConfig(RGP);
         if (!string.IsNullOrWhiteSpace(cur) && File.Exists(cur)) d.InitialDirectory = Path.GetDirectoryName(cur);
         if (d.ShowDialog() == DialogResult.OK)
         {
-            SaveReg(RGP, d.FileName);
+            SaveConfig(RGP, d.FileName);
             _ = SendState();
             _ = _webView.CoreWebView2.ExecuteScriptAsync("showStatus('路径已保存','success')");
         }
@@ -231,7 +384,7 @@ public partial class Form1 : Form
         string localPath = Path.Combine(_bgFolder, "bg_" + DateTime.Now.ToString("yyyyMMddHHmmss") + ext);
         try { File.Copy(src, localPath, true); } catch { localPath = src; }
 
-        SaveReg(RLB, localPath);
+        SaveConfig(RLB, localPath);
         await _webView.CoreWebView2.ExecuteScriptAsync(
             $"setBgFile('{EscapeJs(localPath)}','{EscapeJs(ext)}')");
         _ = _webView.CoreWebView2.ExecuteScriptAsync("showStatus('背景已更新','success')");
@@ -241,11 +394,34 @@ public partial class Form1 : Form
     {
         // payload: "key=value"
         var kv = payload.Split('=', 2);
-        if (kv.Length == 2) SaveReg(kv[0], kv[1]);
+        if (kv.Length == 2) SaveConfig(kv[0], kv[1]);
     }
 
-    static string? GetReg(string name) { try { using var k = Registry.CurrentUser.OpenSubKey(RK); return k?.GetValue(name) as string; } catch { return null; } }
-    static void SaveReg(string name, string val) { try { using var k = Registry.CurrentUser.CreateSubKey(RK); k.SetValue(name, val); } catch { } }
+    string? GetConfig(string name) { _config.TryGetValue(name, out var v); return v; }
+    void SaveConfig(string name, string val) { _config[name] = val; FlushConfig(); }
+
+    void LoadConfig()
+    {
+        try
+        {
+            if (File.Exists(ConfigPath))
+            {
+                var json = File.ReadAllText(ConfigPath);
+                _config = JsonSerializer.Deserialize<Dictionary<string, string>>(json) ?? new();
+            }
+        }
+        catch { _config = new(); }
+    }
+
+    void FlushConfig()
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(_config, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(ConfigPath, json);
+        }
+        catch { }
+    }
     static string EscapeJs(string s) => s.Replace("\\", "\\\\").Replace("'", "\\'").Replace("\n", "\\n").Replace("\r", "");
 
     static string GetHtml() => @"<!DOCTYPE html>
@@ -292,7 +468,18 @@ body{font-family:'Microsoft YaHei UI','Segoe UI',sans-serif;width:1280px;height:
 /* 设置面板 */
 #settingsPanel{position:fixed;top:0;left:0;width:100%;height:100%;z-index:10;background:rgba(14,14,32,0.96);display:none;flex-direction:column;padding:60px 100px;overflow-y:auto;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
 #settingsPanel.show{display:flex}
-#settingsTitle{font-size:22px;font-weight:bold;color:#fff;margin-bottom:40px}
+#settingsTitle{font-size:22px;font-weight:bold;color:#fff;margin-bottom:30px}
+
+/* 标签栏 */
+#tabNav{display:flex;gap:0;margin-bottom:36px;border-bottom:1px solid rgba(255,255,255,0.1)}
+.tabBtn{padding:10px 28px;border:none;background:transparent;color:rgba(255,255,255,0.5);font-size:14px;cursor:pointer;transition:all 0.2s;font-family:inherit;border-bottom:2px solid transparent;position:relative;bottom:-1px}
+.tabBtn:hover{color:rgba(255,255,255,0.8)}
+.tabBtn.active{color:#ffb84d;border-bottom-color:#ffb84d}
+
+/* 标签内容 */
+.tabContent{display:none;flex-direction:column;gap:0}
+.tabContent.active{display:flex}
+
 .section{margin-bottom:28px}
 .section label{display:block;font-size:11px;color:rgba(220,220,230,0.85);margin-bottom:6px}
 .section .row{display:flex;gap:10px;align-items:center}
@@ -301,9 +488,13 @@ body{font-family:'Microsoft YaHei UI','Segoe UI',sans-serif;width:1280px;height:
 .section input[type=""text""]:read-only{color:rgba(200,200,220,0.7)}
 .btnGold{padding:0 22px;height:36px;border-radius:18px;border:none;background:linear-gradient(180deg,#ffb84d,#ff8c28);color:#fff;font-size:11px;font-weight:bold;cursor:pointer;transition:all 0.2s;white-space:nowrap;font-family:inherit}
 .btnGold:hover{background:linear-gradient(180deg,#ffc664,#ff9b37);box-shadow:0 2px 12px rgba(255,150,30,0.35)}
+.btnGray{padding:0 22px;height:36px;border-radius:18px;border:none;background:rgba(100,100,120,0.5);color:rgba(200,200,210,0.5);font-size:11px;font-weight:bold;cursor:default;white-space:nowrap;font-family:inherit;transition:all 0.2s}
 .btnBack{padding:0 28px;height:38px;border-radius:19px;border:none;background:rgba(55,55,78,0.9);color:#fff;font-size:11px;cursor:pointer;transition:all 0.2s;position:absolute;bottom:25px;left:30px;font-family:inherit}
 .btnBack:hover{background:rgba(75,75,100,0.9)}
 #copyright{position:absolute;bottom:25px;right:32px;font-size:10px;color:rgba(255,255,255,0.35);text-align:right;line-height:1.5}
+
+/* 工具区 opt 提示 */
+.optHint{font-size:10px;color:rgba(255,180,80,0.7);margin-top:6px}
 
 /* 状态提示 */
 #toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);z-index:20;padding:10px 24px;border-radius:20px;font-size:11px;color:#fff;opacity:0;transition:opacity 0.3s;pointer-events:none}
@@ -316,7 +507,7 @@ body{font-family:'Microsoft YaHei UI','Segoe UI',sans-serif;width:1280px;height:
 .winBtn:hover{background:rgba(255,255,255,0.1)}
 #btnClose:hover{background:#e81123;color:#fff}
 /* 拖拽区域 */
-#dragHandle{position:fixed;top:0;left:0;width:100%;height:45px;z-index:8;cursor:default}
+#dragHandle{position:fixed;top:0;left:0;right:100px;height:45px;z-index:20;cursor:default}
 </style>
 </head>
 <body>
@@ -326,8 +517,8 @@ body{font-family:'Microsoft YaHei UI','Segoe UI',sans-serif;width:1280px;height:
   <img id=""bgImage"" style=""display:none"">
 </div>
 <div id=""overlay""></div>
+<div id=""dragHandle"" onmousedown=""dragWindow()""></div>
 <div id=""main"">
-  <div id=""dragHandle"" onmousedown=""dragWindow()""></div>
   <div id=""winControls"">
     <button class=""winBtn"" onclick=""minimizeWindow()"" title=""最小化"">&#x2014;</button>
     <button class=""winBtn"" id=""btnClose"" onclick=""closeWindow()"" title=""关闭"">&#x2715;</button>
@@ -342,33 +533,55 @@ body{font-family:'Microsoft YaHei UI','Segoe UI',sans-serif;width:1280px;height:
 </div>
 <div id=""settingsPanel"">
   <div id=""settingsTitle"">设置</div>
-  <div class=""section"">
-    <label>游戏启动路径:</label>
-    <div class=""row"">
-      <input type=""text"" id=""tbPath"" readonly placeholder=""请选择游戏启动程序..."">
-      <button class=""btnGold"" onclick=""browseGame()"">📂 选择路径</button>
-      <button class=""btnGold"" onclick=""resetGamePath()"" style=""background:rgba(120,120,140,0.7);font-weight:normal"">↺ 重置</button>
+
+  <!-- 标签导航 -->
+  <div id=""tabNav"">
+    <button class=""tabBtn active"" id=""tabPathBtn"" onclick=""switchTab('path')"">路径</button>
+    <button class=""tabBtn"" id=""tabToolsBtn"" onclick=""switchTab('tools')"">工具</button>
+  </div>
+
+  <!-- 路径 Tab -->
+  <div class=""tabContent active"" id=""tabPath"">
+    <div class=""section"">
+      <label>游戏启动路径:</label>
+      <div class=""row"">
+        <input type=""text"" id=""tbPath"" readonly placeholder=""请选择游戏启动程序..."">
+        <button class=""btnGold"" onclick=""browseGame()"">📂 选择路径</button>
+        <button class=""btnGold"" onclick=""resetGamePath()"" style=""background:rgba(120,120,140,0.7);font-weight:normal"">↺ 重置</button>
+      </div>
+    </div>
+    <div class=""section"">
+      <label>英文副标题:</label>
+      <div class=""row"">
+        <input type=""text"" id=""tbEngSub"" placeholder=""MaimaiDX Launcher"">
+      </div>
+    </div>
+    <div class=""section"">
+      <label>背景图/视频 (图片或MP4):</label>
+      <div class=""row"">
+        <input type=""text"" id=""tbBg"" readonly placeholder=""选择图片或MP4视频..."">
+        <button class=""btnGold"" onclick=""browseBg()"">📂 选择文件</button>
+      </div>
     </div>
   </div>
-  <div class=""section"">
-    <label>英文副标题:</label>
-    <div class=""row"">
-      <input type=""text"" id=""tbEngSub"" placeholder=""MaimaiDX Launcher"">
+
+  <!-- 工具 Tab -->
+  <div class=""tabContent"" id=""tabTools"">
+    <div class=""section"">
+      <label>Sinmai-Assist 配置工具:</label>
+      <div class=""row"">
+        <button class=""btnGold"" onclick=""openSinmaiEditor()"">🔧 启动配置编辑器</button>
+      </div>
+    </div>
+    <div class=""section"" style=""margin-top:-12px"">
+      <label>Opt 文件夹:</label>
+      <div class=""row"">
+        <button id=""btnOpenOpt"" class=""btnGold"" onclick=""openOptFolder()"">📂 打开文件夹</button>
+        <span id=""optHint"" class=""optHint"" style=""display:none"">请设置游戏启动路径</span>
+      </div>
     </div>
   </div>
-  <div class=""section"">
-    <label>背景图/视频 (图片或MP4):</label>
-    <div class=""row"">
-      <input type=""text"" id=""tbBg"" readonly placeholder=""选择图片或MP4视频..."">
-      <button class=""btnGold"" onclick=""browseBg()"">📂 选择文件</button>
-    </div>
-  </div>
-  <div class=""section"">
-    <label>Sinmai-Assist 配置工具:</label>
-    <div class=""row"">
-      <button class=""btnGold"" onclick=""openSinmaiEditor()"">🔧 启动配置编辑器</button>
-    </div>
-  </div>
+
   <button class=""btnBack"" onclick=""closeSettings()"">← 返回</button>
   <div id=""copyright"">©2026 CreatyCatQ<br>©DeepSeek</div>
 </div>
@@ -378,11 +591,51 @@ body{font-family:'Microsoft YaHei UI','Segoe UI',sans-serif;width:1280px;height:
 // C# 桥接
 function callCS(action,payload){if(payload===undefined)payload='';window.chrome.webview.postMessage(action+'|'+payload)}
 
+// 标签切换
+function switchTab(tab){
+  document.querySelectorAll('.tabBtn').forEach(function(b){b.classList.remove('active')});
+  document.querySelectorAll('.tabContent').forEach(function(c){c.classList.remove('active')});
+  if(tab==='path'){
+    document.getElementById('tabPathBtn').classList.add('active');
+    document.getElementById('tabPath').classList.add('active');
+  }else{
+    document.getElementById('tabToolsBtn').classList.add('active');
+    document.getElementById('tabTools').classList.add('active');
+    updateOptButton();
+  }
+}
+
+// 更新 opt 按钮状态
+function updateOptButton(){
+  var btn=document.getElementById('btnOpenOpt');
+  var hint=document.getElementById('optHint');
+  var gp=document.getElementById('tbPath').value;
+  if(gp){
+    btn.className='btnGold';
+    btn.style.cursor='pointer';
+    hint.style.display='none';
+  }else{
+    btn.className='btnGray';
+    btn.style.cursor='default';
+    hint.style.display='inline';
+  }
+}
+
+// 打开 opt 文件夹
+function openOptFolder(){
+  var gp=document.getElementById('tbPath').value;
+  if(!gp){return;}
+  callCS('openOptFolder');
+}
+
 // 打开/关闭设置
 function openSettings(){
   var es=document.getElementById('tbEngSub').value;
   if(!es||es==='MaimaiDX Launcher')document.getElementById('tbEngSub').value='';
   document.getElementById('settingsPanel').classList.add('show');
+  // 默认显示路径标签
+  switchTab('path');
+  updateOptButton();
 }
 function closeSettings(){
   var es=document.getElementById('tbEngSub').value;
@@ -425,7 +678,7 @@ function closeWindow(){callCS('close')}
 function dragWindow(){callCS('drag')}
 
 // 从 C# 接收状态
-function setState(gp,es,lbg,hasPath){
+function setState(gp,es,lbg,hasPath,optFolderExists){
   document.getElementById('tbPath').value=gp||'';
   if(es)document.getElementById('tbEngSub').value=es;
   document.getElementById('subMsg').textContent=es||'MaimaiDX Launcher';
@@ -441,6 +694,9 @@ function setState(gp,es,lbg,hasPath){
     btn.textContent='开始游戏';
     document.getElementById('statusMsg').textContent=gp?'游戏路径不存在，请重新设置':'请先设置游戏路径';
   }
+
+  // 更新 opt 按钮状态
+  updateOptButton();
 
   // 加载背景
   if(lbg){setBgFile(lbg,lbg.split('.').pop().toLowerCase())}
