@@ -508,6 +508,11 @@ body{font-family:'Microsoft YaHei UI','Segoe UI',sans-serif;width:1280px;height:
 #btnClose:hover{background:#e81123;color:#fff}
 /* 拖拽区域 */
 #dragHandle{position:fixed;top:0;left:0;right:100px;height:45px;z-index:20;cursor:default}
+
+/* 转场动画层 */
+#transitionOverlay{position:fixed;top:0;left:0;width:100%;height:100%;z-index:12;display:none;pointer-events:none}
+#transitionCanvas{width:100vw;height:100vh;position:fixed;top:0;left:0}
+#transitionVideo{display:none}
 </style>
 </head>
 <body>
@@ -587,6 +592,14 @@ body{font-family:'Microsoft YaHei UI','Segoe UI',sans-serif;width:1280px;height:
 </div>
 <div id=""toast""></div>
 
+<!-- 转场动画层（绿幕抠除） -->
+<div id=""transitionOverlay"">
+  <canvas id=""transitionCanvas"" width=""1280"" height=""720""></canvas>
+</div>
+<video id=""transitionVideo"" muted playsinline preload=""auto"">
+  <source src=""https://bg.local/Transition-animation.mp4"" type=""video/mp4"">
+</video>
+
 <script>
 // C# 桥接
 function callCS(action,payload){if(payload===undefined)payload='';window.chrome.webview.postMessage(action+'|'+payload)}
@@ -628,20 +641,26 @@ function openOptFolder(){
   callCS('openOptFolder');
 }
 
-// 打开/关闭设置
+// 打开设置（转场动画前半段覆盖主界面，50% 时设置界面浮现到动画下方）
 function openSettings(){
   var es=document.getElementById('tbEngSub').value;
   if(!es||es==='MaimaiDX Launcher')document.getElementById('tbEngSub').value='';
-  document.getElementById('settingsPanel').classList.add('show');
-  // 默认显示路径标签
-  switchTab('path');
-  updateOptButton();
+  playTransitionVideo(function(){
+    // 动画播放到 50% 时回调：设置界面从动画下方浮现
+    document.getElementById('settingsPanel').classList.add('show');
+    switchTab('path');
+    updateOptButton();
+  });
 }
+// 关闭设置（返回主界面，同样播放转场动画）
 function closeSettings(){
   var es=document.getElementById('tbEngSub').value;
   if(es)callCS('saveReg','EnglishSubtitle='+es);
-  document.getElementById('settingsPanel').classList.remove('show');
-  callCS('getState');
+  playTransitionVideo(function(){
+    // 动画播放到 50% 时：隐藏设置界面，主界面浮现到动画下方
+    document.getElementById('settingsPanel').classList.remove('show');
+    callCS('getState');
+  });
 }
 
 // C# 调用的函数
@@ -734,6 +753,91 @@ document.getElementById('tbEngSub').addEventListener('input',function(){
   var v=this.value||'MaimaiDX Launcher';
   document.getElementById('subMsg').textContent=v;
   callCS('setWindowTitle',v);
+});
+
+// 绿幕转场动画（WebGL GPU 着色器抠除纯绿背景 —— 流畅无卡顿）
+var _transitionGl=null;
+var _transitionCallback=null;
+var _transitionVideoObj=null;
+var _transitionAnimId=null;
+var _transitionHalfDone=false;
+
+function playTransitionVideo(callback){
+  var video=document.getElementById('transitionVideo');
+  var canvas=document.getElementById('transitionCanvas');
+  var overlay=document.getElementById('transitionOverlay');
+  _transitionCallback=callback;
+  _transitionVideoObj=video;
+
+  // 转场层叠加在上方
+  overlay.style.display='block';
+
+  // 初始化 WebGL（仅首次）
+  if(!_transitionGl){
+    _transitionGl=canvas.getContext('webgl',{premultipliedAlpha:false});
+    var gl=_transitionGl;
+
+    // 顶点着色器
+    var vs=gl.createShader(gl.VERTEX_SHADER);
+    gl.shaderSource(vs,'attribute vec2 aPos;varying vec2 vUV;void main(){vUV=(aPos+1.0)/2.0;gl_Position=vec4(aPos,0,1);}');
+    gl.compileShader(vs);
+
+    // 片段着色器 —— 绿幕抠除核心
+    var fs=gl.createShader(gl.FRAGMENT_SHADER);
+    gl.shaderSource(fs,'precision mediump float;varying vec2 vUV;uniform sampler2D uTex;void main(){vec4 c=texture2D(uTex,vUV);if(c.g>0.35&&c.g>c.r*1.3&&c.g>c.b*1.3)discard;gl_FragColor=c;}');
+    gl.compileShader(fs);
+
+    var prog=gl.createProgram();
+    gl.attachShader(prog,vs);gl.attachShader(prog,fs);
+    gl.linkProgram(prog);gl.useProgram(prog);
+
+    // 全屏四边形
+    var buf=gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+    gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1, 1,-1, -1,1, 1,1]),gl.STATIC_DRAW);
+    var aPos=gl.getAttribLocation(prog,'aPos');
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos,2,gl.FLOAT,false,0,0);
+
+    // 纹理
+    var tex=gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D,tex);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    // 视频帧上传时自动翻转 Y 轴（视频解码和 WebGL 纹理坐标系相反）
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+  }
+
+  video.currentTime=0;
+  _transitionHalfDone=false;
+  video.play();
+}
+
+function _processTransitionFrameGL(){
+  var video=_transitionVideoObj;
+  var gl=_transitionGl;
+  if(video.paused || video.ended){
+    if(gl){gl.clear(gl.COLOR_BUFFER_BIT);}
+    document.getElementById('transitionOverlay').style.display='none';
+    if(_transitionCallback){var cb=_transitionCallback;_transitionCallback=null;cb();}
+    _transitionHalfDone=false;
+    return;
+  }
+  // 动画播放到 50% 时：设置界面浮现到动画下方
+  if(!_transitionHalfDone && video.duration && video.currentTime >= video.duration*0.5){
+    _transitionHalfDone=true;
+    if(_transitionCallback){var cb=_transitionCallback;_transitionCallback=null;cb();}
+  }
+  // 上传当前视频帧到 GPU 纹理
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,video);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+  _transitionAnimId=requestAnimationFrame(_processTransitionFrameGL);
+}
+
+document.getElementById('transitionVideo').addEventListener('playing',function(){
+  _transitionAnimId=requestAnimationFrame(_processTransitionFrameGL);
 });
 
 // 初始化：向 C# 请求当前状态
