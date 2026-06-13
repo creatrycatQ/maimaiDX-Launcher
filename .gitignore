@@ -121,5 +121,4 @@ BenchmarkDotNet.Artifacts/
 .mfractor/
 
 # ===== Local working directories =====
-maimaiDX Launcher/
 update/
