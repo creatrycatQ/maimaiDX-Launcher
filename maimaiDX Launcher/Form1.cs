@@ -466,7 +466,7 @@ body{font-family:'Microsoft YaHei UI','Segoe UI',sans-serif;width:1280px;height:
 #btnLaunch.disabled:hover{background:transparent}
 
 /* 设置面板 */
-#settingsPanel{position:fixed;top:0;left:0;width:100%;height:100%;z-index:10;background:rgba(14,14,32,0.96);display:none;flex-direction:column;padding:60px 100px;overflow-y:auto;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+#settingsPanel{position:fixed;top:0;left:0;width:100%;height:100%;z-index:10;background:rgba(10,10,30,0.50);display:none;flex-direction:column;padding:60px 100px;overflow-y:auto;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
 #settingsPanel.show{display:flex}
 #settingsTitle{font-size:22px;font-weight:bold;color:#fff;margin-bottom:30px}
 
