@@ -119,3 +119,7 @@ BenchmarkDotNet.Artifacts/
 .paket/
 .fake/
 .mfractor/
+
+# ===== Local working directories =====
+maimaiDX Launcher/
+update/
